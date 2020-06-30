@@ -1,0 +1,445 @@
+---
+# Source: utils-ingress-controller/templates/controller-configmap.yaml
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-ingress-controller
+  namespace: ingress-nginx
+  labels:
+    release_group: ingress-nginx
+    app: nginx-ingress
+    component: nginx-controller
+data:
+  enable-vts-status: "true"
+  http-snippet: |
+    server {
+      listen 18080;
+
+      location /nginx_status {
+        stub_status on;
+      }
+
+      location / {
+        return 404;
+      }
+    }
+
+---
+# Source: utils-ingress-controller/templates/rbac-controller.yaml
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nginx-ingress-serviceaccount
+  namespace: ingress-nginx
+---
+
+
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: RoleBinding
+metadata:
+  name: ingress-nginx-ingress-rb
+  namespace: ingress-nginx
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ingress-nginx-ingress-role
+subjects:
+  - kind: ServiceAccount
+    name: nginx-ingress-serviceaccount
+    namespace: ingress-nginx
+
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: Role
+metadata:
+  name: ingress-nginx-ingress-role
+  namespace: ingress-nginx
+rules:
+- apiGroups: [""]
+  resources: ["namespaces","configmaps","pods","secrets","endpoints"]
+  verbs: ["get","list","watch","create","update"]
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get","list","update","watch"]
+- apiGroups: ["extensions"]
+  resources: ["ingresses"]
+  verbs: ["get","list","watch"]
+- apiGroups: ["extensions"]
+  resources: ["ingresses/status"]
+  verbs: ["update"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get","list","update","create"]
+- apiGroups: [""]
+  resources: ["endpoints"]
+  verbs: ["create","get","list","update"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create","patch"]
+- apiGroups: ['policy','extensions']
+  resources: ['podsecuritypolicies']
+  verbs: ['use']
+  resourceNames:
+    - hw-psp
+---
+
+
+---
+# Source: utils-ingress-controller/templates/rbac-cluster-controller.yaml
+---
+
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ingress-nginx-ingress-crb
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ingress-nginx-ingress-clusterrole
+subjects:
+  - kind: ServiceAccount
+    name: nginx-ingress-serviceaccount
+    namespace: ingress-nginx
+
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ingress-nginx-ingress-clusterrole
+  namespace: ingress-nginx
+rules:
+- apiGroups: [""]
+  resources: ["configmaps","endpoints","nodes","pods","secrets"]
+  verbs: ["get","list","watch","create","update"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get","list","update","watch"]
+- apiGroups: ["extensions"]
+  resources: ["ingresses"]
+  verbs: ["get","list","watch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create","patch"]
+- apiGroups: ["extensions"]
+  resources: ["ingresses/status"]
+  verbs: ["update"]
+---
+
+
+---
+# Source: utils-ingress-controller/templates/controller-service.yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-ingress-controller
+  namespace: ingress-nginx
+  annotations:
+    cloud.google.com/load-balancer-type: "Internal"
+  labels:
+    release_group: ingress-nginx
+    app: nginx-ingress
+    component: nginx-controller
+spec:
+  ports:
+  - name: http
+    port: 80
+    protocol: TCP
+    targetPort: http
+  - name: https
+    port: 443
+    protocol: TCP
+    targetPort: http
+  selector:
+    release_group: ingress-nginx
+    app: nginx-ingress
+    component: nginx-controller
+  sessionAffinity: None
+  type: LoadBalancer
+
+---
+# Source: utils-ingress-controller/templates/default-backend-service.yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-ingress-default-backend
+  namespace: ingress-nginx
+  labels:
+    release_group: ingress-nginx
+    app: nginx-ingress
+    component: nginx-backend
+spec:
+  ports:
+  - name: http
+    port: 80
+    protocol: TCP
+    targetPort: http
+  selector:
+    release_group: ingress-nginx
+    app: nginx-ingress
+    component: nginx-backend
+  sessionAffinity: None
+  type: ClusterIP
+
+---
+# Source: utils-ingress-controller/templates/controller-deployment.yaml
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-ingress-controller
+  namespace: ingress-nginx
+  labels:
+    release_group: ingress-nginx
+    app: nginx-ingress
+    component: nginx-controller
+spec:
+  replicas: 6
+  selector:
+    matchLabels:
+      app: nginx-ingress
+  revisionHistoryLimit: 0
+  minReadySeconds: 0
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 2
+      maxSurge: 2
+  minReadySeconds: 0
+  template:
+    metadata:
+      labels:
+        release_group: ingress-nginx
+        app: nginx-ingress
+        component: nginx-controller
+    spec:
+      dnsPolicy: ClusterFirst
+      securityContext:
+        runAsUser: 33
+      containers:
+        - name: nginx-ingress-controller
+          image: us.gcr.io/gcs-sre-tools-npe-7901/nginx-ingress-controller@sha256:a805454d5fdc799d28011752b7da5bfa52a4b12dccef735f09c4b18f8598c488
+          imagePullPolicy: IfNotPresent
+          resources:
+            limits:
+              cpu: "2000m"
+              memory: "1024Mi"
+            requests:
+              cpu: "300m"
+              memory: "256Mi"
+          args:
+                  #   - -nginx-configmaps=$(POD_NAMESPACE)/nginx-config
+                  #- -default-server-tls-secret=$(POD_NAMESPACE)/default-server-secret
+            - /nginx-ingress-controller
+            - --default-backend-service=ingress-nginx/nginx-ingress-default-backend
+            - --election-id=ingress-controller-leader
+            - --ingress-class=nginx
+            - --configmap=ingress-nginx/nginx-ingress-controller
+              #          - --default-ssl-certificate=$(POD_NAMESPACE)/default-ssl-certificate
+              # - --client-ca-file=/home/jxm688/newcert/ca.crt
+              # - --tls-cert-file=/home/jxm688/newcert/server.crt
+              #- --tls-private-key-file=/home/jxm688/newcert/server.key
+              #- --validating-webhook-certificate=/home/jxm688/newcert/server.crt
+              #- --validating-webhook-key=/home/jxm688/newcert/server.key
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 10254
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+            - name: https
+              containerPort: 443
+              protocol: TCP
+            - name: stats
+              containerPort: 18080
+              protocol: TCP
+            - name: metrics
+              containerPort: 10254
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 10254
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+      hostNetwork: false
+      serviceAccountName: nginx-ingress-serviceaccount
+      terminationGracePeriodSeconds: 60
+
+---
+# Source: utils-ingress-controller/templates/default-backend-deployment.yaml
+
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-ingress-default-backend
+  namespace: ingress-nginx
+  labels:
+    release_group: ingress-nginx
+    app: nginx-ingress
+    component: ingress-nginx
+spec:
+  replicas: 6
+  selector:
+    matchLabels:
+      app: nginx-ingress
+  revisionHistoryLimit: 0
+  minReadySeconds: 0
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 2
+      maxSurge: 2
+  template:
+    metadata:
+      labels:
+        release_group: ingress-nginx
+        app: nginx-ingress
+        component: nginx-backend
+    spec:
+      serviceAccountName: nginx-ingress-serviceaccount
+      containers:
+        - name: nginx-ingress-default-backend
+          image: k8s.gcr.io/defaultbackend:1.3
+          imagePullPolicy: IfNotPresent
+          resources:
+            limits:
+              cpu: "2000m"
+              memory: "1024Mi"
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+          args:
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 30
+            timeoutSeconds: 5
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+      terminationGracePeriodSeconds: 60
+---
+apiVersion: autoscaling/v2beta1
+kind: HorizontalPodAutoscaler
+metadata:
+  labels:
+    release_group: ingress-nginx
+    app: nginx-ingress
+    component: ingress-nginx
+  name: ingress-nginx-default-backend
+  namespace: ingress-nginx
+spec:
+  maxReplicas: 20
+  metrics:
+  - resource:
+      name: cpu
+      targetAverageUtilization: 80
+    type: Resource
+  minReplicas: 3
+  scaleTargetRef:
+    apiVersion: extensions/v1beta1
+    kind: Deployment
+    name: nginx-ingress-default-backend
+---
+apiVersion: autoscaling/v2beta1
+kind: HorizontalPodAutoscaler
+metadata:
+  labels:
+    release_group: ingress-nginx
+    app: nginx-ingress
+    component: nginx-controller
+  name: ingress-nginx-controller
+  namespace: ingress-nginx
+spec:
+  maxReplicas: 40
+  metrics:
+  - resource:
+      name: cpu
+      targetAverageUtilization: 80
+    type: Resource
+  minReplicas: 3
+  scaleTargetRef:
+    apiVersion: extensions/v1beta1
+    kind: Deployment
+    name: nginx-ingress-controller
+---
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: hw-psp
+  annotations:
+    seccomp.security.alpha.kubernetes.io/allowedProfileNames: 'runtime/default'
+    seccomp.security.alpha.kubernetes.io/defaultProfileName:  'runtime/default'
+spec:
+  privileged: false
+  allowPrivilegeEscalation: true
+  allowedCapabilities:
+    - 'NET_ADMIN'
+  volumes:
+    - 'configMap'
+    - 'emptyDir'
+    - 'projected'
+    - 'secret'
+    - 'downwardAPI'
+    - 'persistentVolumeClaim'
+  hostNetwork: false
+  hostPorts:
+    - min: 0
+      max: 65535
+  hostIPC: false
+  hostPID: false
+  runAsUser:
+    rule: 'MustRunAsNonRoot'
+  seLinux:
+    rule: 'RunAsAny'
+  supplementalGroups:
+    rule: 'MustRunAs'
+    ranges:
+      - min: 1
+        max: 65535
+  fsGroup:
+    rule: 'MustRunAs'
+    ranges:
+      - min: 1
+        max: 65535
+  readOnlyRootFilesystem: false
